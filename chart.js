@@ -504,32 +504,66 @@
     ctx.setLineDash([]);
     ctx.restore();
 
-    // labels outside clip so they are not cut off
-    drawGuideLabel(ctx, layout, yHi, COLORS.highLine, "최고 " + formatPrice(highCandle.high), xHi, -12);
-    drawGuideLabel(ctx, layout, yLo, COLORS.lowLine, "최저 " + formatPrice(lowCandle.low), xLo, 12);
+    // labels outside clip: above the high wick / below the low wick of that candle
+    drawCandlePriceLabel(
+      ctx,
+      layout,
+      xHi,
+      yHi,
+      COLORS.highLine,
+      "최고 " + formatPrice(highCandle.high),
+      "above"
+    );
+    drawCandlePriceLabel(
+      ctx,
+      layout,
+      xLo,
+      yLo,
+      COLORS.lowLine,
+      "최저 " + formatPrice(lowCandle.low),
+      "below"
+    );
     drawMaLegend(ctx, layout);
 
     ctx.restore();
   }
 
-  function drawGuideLabel(ctx, layout, y, color, label, preferX, yOffset) {
+  /** Place a price label centered on a candle, above its high or below its low. */
+  function drawCandlePriceLabel(ctx, layout, candleX, wickY, color, label, place) {
     const { plotLeft, plotTop, plotWidth, plotHeight } = layout;
+    const gap = 6;
+    const boxH = 16;
+    const padX = 4;
+
     ctx.save();
     ctx.font = "12px sans-serif";
+    ctx.textAlign = "center";
     ctx.textBaseline = "middle";
-    const metrics = ctx.measureText(label);
-    const pad = 4;
-    let tx = clamp(
-      preferX - metrics.width / 2,
-      plotLeft + 4,
-      plotLeft + plotWidth - metrics.width - 8
+    const textW = ctx.measureText(label).width;
+    const boxW = textW + padX * 2;
+
+    let cx = clamp(
+      candleX,
+      plotLeft + boxW / 2 + 2,
+      plotLeft + plotWidth - boxW / 2 - 2
     );
-    let ty = clamp(y + yOffset, plotTop + 10, plotTop + plotHeight - 10);
+    let cy;
+    if (place === "above") {
+      cy = wickY - gap - boxH / 2;
+      if (cy - boxH / 2 < plotTop + 2) {
+        cy = Math.min(wickY + gap + boxH / 2, plotTop + plotHeight - boxH / 2 - 2);
+      }
+    } else {
+      cy = wickY + gap + boxH / 2;
+      if (cy + boxH / 2 > plotTop + plotHeight - 2) {
+        cy = Math.max(wickY - gap - boxH / 2, plotTop + boxH / 2 + 2);
+      }
+    }
+
     ctx.fillStyle = COLORS.labelBg;
-    ctx.fillRect(tx - pad, ty - 8, metrics.width + pad * 2, 16);
+    ctx.fillRect(cx - boxW / 2, cy - boxH / 2, boxW, boxH);
     ctx.fillStyle = color;
-    ctx.textAlign = "left";
-    ctx.fillText(label, tx, ty);
+    ctx.fillText(label, cx, cy);
     ctx.restore();
   }
 
