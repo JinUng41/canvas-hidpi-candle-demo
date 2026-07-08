@@ -44,6 +44,8 @@
     highLine: "#0b6e4f",
     lowLine: "#b42318",
     labelBg: "rgba(255,255,255,0.85)",
+    rangeFill: "rgba(37, 99, 235, 0.18)",
+    rangeStroke: "rgba(37, 99, 235, 0.85)",
     ma5: "#7c3aed",
     ma20: "#2563eb",
     ma60: "#d97706",
@@ -374,7 +376,7 @@
     ctx.restore();
   }
 
-  function drawChart(ctx, candles, maSeries, viewport, layout) {
+  function drawChart(ctx, candles, maSeries, viewport, layout, selection) {
     const { cssW, cssH, plotLeft, plotTop, plotWidth, plotHeight } = layout;
     ctx.clearRect(0, 0, cssW, cssH);
     ctx.fillStyle = COLORS.background;
@@ -525,6 +527,31 @@
     );
     drawMaLegend(ctx, layout);
 
+    if (selection && selection.x0 != null && selection.x1 != null) {
+      drawRangeSelection(ctx, layout, selection.x0, selection.x1);
+    }
+
+    ctx.restore();
+  }
+
+  function drawRangeSelection(ctx, layout, x0, x1) {
+    const left = clamp(
+      Math.min(x0, x1),
+      layout.plotLeft,
+      layout.plotLeft + layout.plotWidth
+    );
+    const right = clamp(
+      Math.max(x0, x1),
+      layout.plotLeft,
+      layout.plotLeft + layout.plotWidth
+    );
+    const w = Math.max(1, right - left);
+    ctx.save();
+    ctx.fillStyle = COLORS.rangeFill;
+    ctx.fillRect(left, layout.plotTop, w, layout.plotHeight);
+    ctx.strokeStyle = COLORS.rangeStroke;
+    ctx.lineWidth = 1.5;
+    ctx.strokeRect(left + 0.5, layout.plotTop + 0.5, w - 1, layout.plotHeight - 1);
     ctx.restore();
   }
 
@@ -571,21 +598,36 @@
   // [7] Chart instance (gestures)
   // ---------------------------------------------------------------------------
 
-  function createChart({ id, canvas, candles, maSeries, useDPR, getViewport, requestViewport, onInteract }) {
+  function createChart({
+    id,
+    canvas,
+    candles,
+    maSeries,
+    useDPR,
+    getViewport,
+    requestViewport,
+    onInteract,
+    isRangeZoomMode,
+  }) {
     let layout = computeLayout(1, 1);
     const pointers = new Map();
     let gesture = { mode: "idle" };
     let pinch = null;
+    let selection = null;
 
     function measureAndDraw() {
       const { cssW, cssH, ctx } = resizeCanvas(canvas, useDPR);
       layout = computeLayout(cssW, cssH);
-      drawChart(ctx, candles, maSeries, getViewport(), layout);
+      drawChart(ctx, candles, maSeries, getViewport(), layout, selection);
     }
 
     function localPoint(e) {
       const rect = canvas.getBoundingClientRect();
       return { x: e.clientX - rect.left, y: e.clientY - rect.top };
+    }
+
+    function wantsRangeZoom(e) {
+      return !!(e.shiftKey || (isRangeZoomMode && isRangeZoomMode()));
     }
 
     function zoomAt(anchorIndex, factor, ratioX) {
@@ -613,9 +655,29 @@
       });
     }
 
+    function applyRangeZoom(x0, x1) {
+      const left = Math.min(x0, x1);
+      const right = Math.max(x0, x1);
+      if (right - left < 4) return;
+      const vp = getViewport();
+      const i0 = xToIndex(left, vp, layout);
+      const i1 = xToIndex(right, vp, layout);
+      const startIndex = Math.min(i0, i1);
+      const endIndex = Math.max(i0, i1);
+      const visibleCount = clamp(
+        endIndex - startIndex,
+        MIN_VISIBLE,
+        candles.length
+      );
+      requestViewport(
+        clampViewport({ startIndex, visibleCount }, candles.length)
+      );
+    }
+
     function beginPinch() {
       const pts = Array.from(pointers.values());
       if (pts.length < 2) return;
+      selection = null;
       const [a, b] = pts;
       const dist = Math.hypot(b.x - a.x, b.y - a.y) || 1;
       const midX = (a.x + b.x) / 2;
@@ -638,16 +700,32 @@
       pointers.set(e.pointerId, p);
 
       if (pointers.size === 1) {
-        gesture = {
-          mode: "pending",
-          startX: p.x,
-          startY: p.y,
-          lastX: p.x,
-          lastY: p.y,
-          inPlot: hitPlot(p.x, p.y, layout),
-        };
+        const inPlot = hitPlot(p.x, p.y, layout);
+        if (inPlot && wantsRangeZoom(e)) {
+          gesture = {
+            mode: "rangeSelect",
+            startX: p.x,
+            startY: p.y,
+            lastX: p.x,
+            lastY: p.y,
+            inPlot: true,
+          };
+          selection = { x0: p.x, x1: p.x };
+          measureAndDraw();
+        } else {
+          gesture = {
+            mode: "pending",
+            startX: p.x,
+            startY: p.y,
+            lastX: p.x,
+            lastY: p.y,
+            inPlot: inPlot,
+          };
+          selection = null;
+        }
       } else if (pointers.size === 2) {
         beginPinch();
+        measureAndDraw();
       }
       e.preventDefault();
     }
@@ -672,6 +750,18 @@
           candles.length - visibleCount
         );
         requestViewport({ startIndex, visibleCount });
+        e.preventDefault();
+        return;
+      }
+
+      if (gesture.mode === "rangeSelect") {
+        const x = clamp(
+          p.x,
+          layout.plotLeft,
+          layout.plotLeft + layout.plotWidth
+        );
+        selection = { x0: gesture.startX, x1: x };
+        measureAndDraw();
         e.preventDefault();
         return;
       }
@@ -707,10 +797,20 @@
     }
 
     function endPointer(e) {
+      if (gesture.mode === "rangeSelect" && selection) {
+        applyRangeZoom(selection.x0, selection.x1);
+        selection = null;
+        measureAndDraw();
+      }
+
       pointers.delete(e.pointerId);
       if (pointers.size === 0) {
         gesture = { mode: "idle" };
         pinch = null;
+        if (selection) {
+          selection = null;
+          measureAndDraw();
+        }
       } else if (pointers.size === 1) {
         pinch = null;
         const remaining = Array.from(pointers.values())[0];
@@ -737,6 +837,16 @@
       zoomAt(anchorIndex, factor, ratioX);
     }
 
+    function updateCursor() {
+      canvas.style.cursor = isRangeZoomMode && isRangeZoomMode()
+        ? "crosshair"
+        : "crosshair";
+      canvas.classList.toggle(
+        "range-zoom-active",
+        !!(isRangeZoomMode && isRangeZoomMode())
+      );
+    }
+
     canvas.addEventListener("pointerdown", onPointerDown);
     canvas.addEventListener("pointermove", onPointerMove);
     canvas.addEventListener("pointerup", endPointer);
@@ -749,6 +859,7 @@
       canvas,
       useDPR,
       draw: measureAndDraw,
+      updateCursor,
       zoomCentered(factor) {
         onInteract(id);
         const vp = getViewport();
@@ -796,11 +907,13 @@
 
   let activeChartId = "dpr";
   let syncEnabled = false;
+  let rangeZoomMode = false;
   let isApplyingSync = false;
   let lastDpr = window.devicePixelRatio || 1;
 
   const dprLabel = document.getElementById("dpr-label");
   const syncToggle = document.getElementById("sync-toggle");
+  const rangeZoomBtn = document.getElementById("range-zoom-toggle");
   const panels = {
     raw: document.getElementById("panel-raw"),
     dpr: document.getElementById("panel-dpr"),
@@ -809,6 +922,19 @@
   function updateDprLabel() {
     const dpr = window.devicePixelRatio || 1;
     dprLabel.textContent = "현재 devicePixelRatio: " + dpr;
+  }
+
+  function setRangeZoomMode(on) {
+    rangeZoomMode = !!on;
+    if (rangeZoomBtn) {
+      rangeZoomBtn.classList.toggle("is-pressed", rangeZoomMode);
+      rangeZoomBtn.setAttribute("aria-pressed", rangeZoomMode ? "true" : "false");
+    }
+    document.body.classList.toggle("range-zoom-mode", rangeZoomMode);
+    if (charts) {
+      charts.raw.updateCursor();
+      charts.dpr.updateCursor();
+    }
   }
 
   function setActiveChart(id) {
@@ -867,6 +993,9 @@
       },
       requestViewport: requestFromChart("raw"),
       onInteract: setActiveChart,
+      isRangeZoomMode: function () {
+        return rangeZoomMode;
+      },
     }),
     dpr: createChart({
       id: "dpr",
@@ -879,6 +1008,9 @@
       },
       requestViewport: requestFromChart("dpr"),
       onInteract: setActiveChart,
+      isRangeZoomMode: function () {
+        return rangeZoomMode;
+      },
     }),
   };
 
@@ -924,6 +1056,12 @@
   syncToggle.addEventListener("change", function () {
     syncEnabled = syncToggle.checked;
   });
+
+  if (rangeZoomBtn) {
+    rangeZoomBtn.addEventListener("click", function () {
+      setRangeZoomMode(!rangeZoomMode);
+    });
+  }
 
   function redrawAll() {
     charts.raw.draw();

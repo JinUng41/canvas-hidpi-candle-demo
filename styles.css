@@ -99,6 +99,17 @@ button:active {
   transform: translateY(1px);
 }
 
+button.is-pressed {
+  border-color: #6aa88f;
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-weight: 600;
+}
+
+body.range-zoom-mode .canvas-wrap canvas {
+  cursor: crosshair;
+}
+
 .sync-label {
   display: inline-flex;
   align-items: center;
