@@ -610,15 +610,28 @@
     isRangeZoomMode,
   }) {
     let layout = computeLayout(1, 1);
+    let ctx = null;
     const pointers = new Map();
     let gesture = { mode: "idle" };
     let pinch = null;
     let selection = null;
+    let rangeZoomApplied = false;
+
+    function ensureSized() {
+      const sized = resizeCanvas(canvas, useDPR);
+      ctx = sized.ctx;
+      layout = computeLayout(sized.cssW, sized.cssH);
+      return sized;
+    }
+
+    function paint() {
+      if (!ctx) ensureSized();
+      drawChart(ctx, candles, maSeries, getViewport(), layout, selection);
+    }
 
     function measureAndDraw() {
-      const { cssW, cssH, ctx } = resizeCanvas(canvas, useDPR);
-      layout = computeLayout(cssW, cssH);
-      drawChart(ctx, candles, maSeries, getViewport(), layout, selection);
+      ensureSized();
+      paint();
     }
 
     function localPoint(e) {
@@ -628,6 +641,10 @@
 
     function wantsRangeZoom(e) {
       return !!(e.shiftKey || (isRangeZoomMode && isRangeZoomMode()));
+    }
+
+    function clampPlotX(x) {
+      return clamp(x, layout.plotLeft, layout.plotLeft + layout.plotWidth);
     }
 
     function zoomAt(anchorIndex, factor, ratioX) {
@@ -658,20 +675,39 @@
     function applyRangeZoom(x0, x1) {
       const left = Math.min(x0, x1);
       const right = Math.max(x0, x1);
-      if (right - left < 4) return;
+      if (right - left < 8) return false;
       const vp = getViewport();
       const i0 = xToIndex(left, vp, layout);
       const i1 = xToIndex(right, vp, layout);
       const startIndex = Math.min(i0, i1);
       const endIndex = Math.max(i0, i1);
-      const visibleCount = clamp(
-        endIndex - startIndex,
-        MIN_VISIBLE,
-        candles.length
-      );
+      let visibleCount = endIndex - startIndex;
+      if (visibleCount < MIN_VISIBLE) {
+        const mid = (startIndex + endIndex) / 2;
+        visibleCount = MIN_VISIBLE;
+        requestViewport(
+          clampViewport(
+            { startIndex: mid - visibleCount / 2, visibleCount },
+            candles.length
+          )
+        );
+        return true;
+      }
+      visibleCount = clamp(visibleCount, MIN_VISIBLE, candles.length);
       requestViewport(
         clampViewport({ startIndex, visibleCount }, candles.length)
       );
+      return true;
+    }
+
+    function finishRangeSelect() {
+      if (gesture.mode !== "rangeSelect" || rangeZoomApplied) return;
+      rangeZoomApplied = true;
+      if (selection) {
+        applyRangeZoom(selection.x0, selection.x1);
+      }
+      selection = null;
+      paint();
     }
 
     function beginPinch() {
@@ -698,20 +734,22 @@
       canvas.setPointerCapture(e.pointerId);
       const p = localPoint(e);
       pointers.set(e.pointerId, p);
+      rangeZoomApplied = false;
 
       if (pointers.size === 1) {
         const inPlot = hitPlot(p.x, p.y, layout);
         if (inPlot && wantsRangeZoom(e)) {
+          const x = clampPlotX(p.x);
           gesture = {
             mode: "rangeSelect",
-            startX: p.x,
+            startX: x,
             startY: p.y,
-            lastX: p.x,
+            lastX: x,
             lastY: p.y,
             inPlot: true,
           };
-          selection = { x0: p.x, x1: p.x };
-          measureAndDraw();
+          selection = { x0: x, x1: x };
+          paint();
         } else {
           gesture = {
             mode: "pending",
@@ -725,7 +763,7 @@
         }
       } else if (pointers.size === 2) {
         beginPinch();
-        measureAndDraw();
+        paint();
       }
       e.preventDefault();
     }
@@ -755,13 +793,9 @@
       }
 
       if (gesture.mode === "rangeSelect") {
-        const x = clamp(
-          p.x,
-          layout.plotLeft,
-          layout.plotLeft + layout.plotWidth
-        );
+        const x = clampPlotX(p.x);
         selection = { x0: gesture.startX, x1: x };
-        measureAndDraw();
+        paint();
         e.preventDefault();
         return;
       }
@@ -796,20 +830,38 @@
       e.preventDefault();
     }
 
-    function endPointer(e) {
-      if (gesture.mode === "rangeSelect" && selection) {
-        applyRangeZoom(selection.x0, selection.x1);
-        selection = null;
-        measureAndDraw();
+    function onPointerUp(e) {
+      if (gesture.mode === "rangeSelect") {
+        finishRangeSelect();
       }
+      cleanupPointer(e.pointerId);
+    }
 
-      pointers.delete(e.pointerId);
+    function onPointerCancel(e) {
+      if (gesture.mode === "rangeSelect") {
+        selection = null;
+        rangeZoomApplied = true;
+        paint();
+      }
+      cleanupPointer(e.pointerId);
+    }
+
+    function onLostCapture(e) {
+      // Backup if pointerup was skipped; do not double-apply.
+      if (gesture.mode === "rangeSelect") {
+        finishRangeSelect();
+      }
+      cleanupPointer(e.pointerId);
+    }
+
+    function cleanupPointer(pointerId) {
+      pointers.delete(pointerId);
       if (pointers.size === 0) {
         gesture = { mode: "idle" };
         pinch = null;
         if (selection) {
           selection = null;
-          measureAndDraw();
+          paint();
         }
       } else if (pointers.size === 1) {
         pinch = null;
@@ -838,20 +890,16 @@
     }
 
     function updateCursor() {
-      canvas.style.cursor = isRangeZoomMode && isRangeZoomMode()
-        ? "crosshair"
-        : "crosshair";
-      canvas.classList.toggle(
-        "range-zoom-active",
-        !!(isRangeZoomMode && isRangeZoomMode())
-      );
+      const on = !!(isRangeZoomMode && isRangeZoomMode());
+      canvas.style.cursor = on ? "col-resize" : "crosshair";
+      canvas.classList.toggle("range-zoom-active", on);
     }
 
     canvas.addEventListener("pointerdown", onPointerDown);
     canvas.addEventListener("pointermove", onPointerMove);
-    canvas.addEventListener("pointerup", endPointer);
-    canvas.addEventListener("pointercancel", endPointer);
-    canvas.addEventListener("lostpointercapture", endPointer);
+    canvas.addEventListener("pointerup", onPointerUp);
+    canvas.addEventListener("pointercancel", onPointerCancel);
+    canvas.addEventListener("lostpointercapture", onLostCapture);
     canvas.addEventListener("wheel", onWheel, { passive: false });
 
     return {
@@ -886,9 +934,9 @@
       destroy() {
         canvas.removeEventListener("pointerdown", onPointerDown);
         canvas.removeEventListener("pointermove", onPointerMove);
-        canvas.removeEventListener("pointerup", endPointer);
-        canvas.removeEventListener("pointercancel", endPointer);
-        canvas.removeEventListener("lostpointercapture", endPointer);
+        canvas.removeEventListener("pointerup", onPointerUp);
+        canvas.removeEventListener("pointercancel", onPointerCancel);
+        canvas.removeEventListener("lostpointercapture", onLostCapture);
         canvas.removeEventListener("wheel", onWheel);
       },
     };
