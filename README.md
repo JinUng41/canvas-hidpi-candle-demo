@@ -4,6 +4,8 @@ HTML5 Canvas로 캔들 차트를 그릴 때, **`devicePixelRatio`(DPR)를 적용
 
 빌드·의존성 없이 `index.html`만 열면 동작합니다.
 
+**라이브 데모:** https://jinung41.github.io/canvas-hidpi-candle-demo/
+
 ## 핵심 개념
 
 고해상도(Retina 등) 화면에서는 CSS 픽셀보다 실제 디바이스 픽셀이 많습니다. Canvas 비트맵을 CSS 크기만으로 두면 브라우저가 확대해 보여 주면서 **글자·선이 흐려질** 수 있습니다.
