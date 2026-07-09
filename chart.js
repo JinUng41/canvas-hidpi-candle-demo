@@ -11,6 +11,8 @@
 
   const CANDLE_COUNT = 2000;
   const SEED = 42;
+  const LIVE_TICK_MS = 350;
+  const LIVE_CANDLE_MS = 3000;
   const MIN_VISIBLE = 20;
   const INITIAL_VISIBLE = 500;
   const PRESET_500 = 500;
@@ -148,6 +150,116 @@
       series[key] = computeSMA(candles, period);
     }
     return series;
+  }
+
+  function refreshMaSeries(candles, maSeries) {
+    const next = computeMovingAverages(candles);
+    for (let i = 0; i < MA_PERIODS.length; i++) {
+      maSeries[MA_PERIODS[i].key] = next[MA_PERIODS[i].key];
+    }
+  }
+
+  function isViewportAtEnd(viewport, length) {
+    return viewport.startIndex + viewport.visibleCount >= length - 1.5;
+  }
+
+  function adjustViewportsForLive(candles, viewports, shifted) {
+    Object.keys(viewports).forEach(function (id) {
+      const vp = viewports[id];
+      const atEnd = isViewportAtEnd(vp, candles.length + (shifted ? 1 : 0));
+      let startIndex = vp.startIndex;
+      if (shifted && startIndex > 0) {
+        startIndex -= 1;
+      }
+      if (atEnd) {
+        startIndex = Math.max(0, candles.length - vp.visibleCount);
+      }
+      viewports[id] = clampViewport(
+        { startIndex, visibleCount: vp.visibleCount },
+        candles.length
+      );
+    });
+  }
+
+  function alignCandlesToNow(candles) {
+    const last = candles[candles.length - 1];
+    const nowBucket = Math.floor(Date.now() / MINUTE_MS) * MINUTE_MS;
+    const delta = nowBucket - last.time;
+    for (let i = 0; i < candles.length; i++) {
+      candles[i].time += delta;
+    }
+  }
+
+  function tickLivePrice(candles, maSeries, liveRand) {
+    const c = candles[candles.length - 1];
+    const delta = (liveRand() - 0.5) * 14;
+    c.close = Math.max(100, c.close + delta);
+    c.high = Math.max(c.high, c.close, c.open);
+    c.low = Math.min(c.low, c.close, c.open);
+    refreshMaSeries(candles, maSeries);
+  }
+
+  function rollLiveCandle(candles, maSeries, liveRand) {
+    const prev = candles[candles.length - 1];
+    const open = prev.close;
+    const drift = (liveRand() - 0.48) * 40;
+    const close = Math.max(100, open + drift + (liveRand() - 0.5) * 20);
+    const bodyHigh = Math.max(open, close);
+    const bodyLow = Math.min(open, close);
+    const candle = {
+      time: prev.time + MINUTE_MS,
+      open,
+      high: bodyHigh + liveRand() * 25,
+      low: Math.max(1, bodyLow - liveRand() * 25),
+      close,
+    };
+    candle.high = Math.max(candle.high, open, close);
+    candle.low = Math.min(candle.low, open, close);
+
+    const shifted = candles.length >= CANDLE_COUNT;
+    if (shifted) candles.shift();
+    candles.push(candle);
+    refreshMaSeries(candles, maSeries);
+    return shifted;
+  }
+
+  function startLiveSimulation(options) {
+    const {
+      candles,
+      maSeries,
+      viewports,
+      redrawAll,
+      getEnabled,
+      onToggle,
+    } = options;
+    const liveRand = mulberry32(SEED + 1000);
+
+    setInterval(function () {
+      if (!getEnabled()) return;
+      tickLivePrice(candles, maSeries, liveRand);
+      Object.keys(viewports).forEach(function (id) {
+        const vp = viewports[id];
+        if (isViewportAtEnd(vp, candles.length)) {
+          viewports[id] = clampViewport(
+            {
+              startIndex: Math.max(0, candles.length - vp.visibleCount),
+              visibleCount: vp.visibleCount,
+            },
+            candles.length
+          );
+        }
+      });
+      redrawAll();
+    }, LIVE_TICK_MS);
+
+    setInterval(function () {
+      if (!getEnabled()) return;
+      const shifted = rollLiveCandle(candles, maSeries, liveRand);
+      adjustViewportsForLive(candles, viewports, shifted);
+      redrawAll();
+    }, LIVE_CANDLE_MS);
+
+    if (onToggle) onToggle(getEnabled());
   }
 
   // ---------------------------------------------------------------------------
@@ -956,12 +1068,14 @@
   let activeChartId = "dpr";
   let syncEnabled = false;
   let rangeZoomMode = false;
+  let liveEnabled = true;
   let isApplyingSync = false;
   let lastDpr = window.devicePixelRatio || 1;
 
   const dprLabel = document.getElementById("dpr-label");
   const syncToggle = document.getElementById("sync-toggle");
   const rangeZoomBtn = document.getElementById("range-zoom-toggle");
+  const liveToggleBtn = document.getElementById("live-toggle");
   const panels = {
     raw: document.getElementById("panel-raw"),
     dpr: document.getElementById("panel-dpr"),
@@ -982,6 +1096,14 @@
     if (charts) {
       charts.raw.updateCursor();
       charts.dpr.updateCursor();
+    }
+  }
+
+  function setLiveMode(on) {
+    liveEnabled = !!on;
+    if (liveToggleBtn) {
+      liveToggleBtn.classList.toggle("is-pressed", liveEnabled);
+      liveToggleBtn.setAttribute("aria-pressed", liveEnabled ? "true" : "false");
     }
   }
 
@@ -1111,6 +1233,12 @@
     });
   }
 
+  if (liveToggleBtn) {
+    liveToggleBtn.addEventListener("click", function () {
+      setLiveMode(!liveEnabled);
+    });
+  }
+
   function redrawAll() {
     charts.raw.draw();
     charts.dpr.draw();
@@ -1147,7 +1275,20 @@
 
   updateDprLabel();
   setActiveChart("dpr");
+  setLiveMode(true);
+  alignCandlesToNow(candles);
   redrawAll();
   bindDprMedia();
   window.addEventListener("resize", onResizeOrDpr);
+
+  startLiveSimulation({
+    candles,
+    maSeries,
+    viewports,
+    redrawAll,
+    getEnabled: function () {
+      return liveEnabled;
+    },
+    onToggle: setLiveMode,
+  });
 })();

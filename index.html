@@ -4,7 +4,7 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Canvas HiDPI 캔들 차트 비교</title>
-    <link rel="stylesheet" href="styles.css?v=3" />
+    <link rel="stylesheet" href="styles.css?v=4" />
   </head>
   <body>
     <header class="page-header">
@@ -23,6 +23,15 @@
         <button type="button" data-action="reset">리셋</button>
         <button type="button" data-action="preset-500">500개</button>
         <button type="button" data-action="preset-40">40개</button>
+        <button
+          type="button"
+          id="live-toggle"
+          class="is-pressed"
+          aria-pressed="true"
+          title="마지막 봉 가격 갱신 및 새 분봉 추가"
+        >
+          실시간
+        </button>
         <button
           type="button"
           id="range-zoom-toggle"
@@ -73,6 +82,6 @@
       </article>
     </main>
 
-    <script src="chart.js?v=3"></script>
+    <script src="chart.js?v=4"></script>
   </body>
 </html>
