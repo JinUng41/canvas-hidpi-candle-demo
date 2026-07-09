@@ -48,6 +48,7 @@
     labelBg: "rgba(255,255,255,0.85)",
     rangeFill: "rgba(37, 99, 235, 0.18)",
     rangeStroke: "rgba(37, 99, 235, 0.85)",
+    currentPriceLine: "rgba(80, 96, 112, 0.55)",
     ma5: "#7c3aed",
     ma20: "#2563eb",
     ma60: "#d97706",
@@ -488,6 +489,42 @@
     ctx.restore();
   }
 
+  function drawCurrentPrice(ctx, layout, extent, price, isUp) {
+    const { plotLeft, plotTop, plotWidth, plotHeight } = layout;
+    const rawY = priceToY(price, extent, layout);
+    const y = clamp(rawY, plotTop, plotTop + plotHeight);
+    const inRange = price >= extent.min && price <= extent.max;
+
+    if (inRange) {
+      ctx.save();
+      ctx.strokeStyle = COLORS.currentPriceLine;
+      ctx.lineWidth = 1;
+      ctx.setLineDash([4, 4]);
+      ctx.beginPath();
+      ctx.moveTo(plotLeft, y);
+      ctx.lineTo(plotLeft + plotWidth, y);
+      ctx.stroke();
+      ctx.setLineDash([]);
+      ctx.restore();
+    }
+
+    const label = formatPrice(price);
+    const padX = 5;
+    const boxH = 16;
+    ctx.font = "bold 11px sans-serif";
+    const textW = ctx.measureText(label).width;
+    const boxW = Math.min(textW + padX * 2, PAD_RIGHT - 4);
+    const x = plotLeft + plotWidth + 4;
+    const tagY = y;
+
+    ctx.fillStyle = isUp ? COLORS.up : COLORS.down;
+    ctx.fillRect(x, tagY - boxH / 2, boxW, boxH);
+    ctx.fillStyle = "#ffffff";
+    ctx.textAlign = "left";
+    ctx.textBaseline = "middle";
+    ctx.fillText(label, x + padX, tagY);
+  }
+
   function drawChart(ctx, candles, maSeries, viewport, layout, selection) {
     const { cssW, cssH, plotLeft, plotTop, plotWidth, plotHeight } = layout;
     ctx.clearRect(0, 0, cssW, cssH);
@@ -638,6 +675,17 @@
       "below"
     );
     drawMaLegend(ctx, layout);
+
+    const currentCandle = candles[candles.length - 1];
+    if (currentCandle) {
+      drawCurrentPrice(
+        ctx,
+        layout,
+        extent,
+        currentCandle.close,
+        currentCandle.close >= currentCandle.open
+      );
+    }
 
     if (selection && selection.x0 != null && selection.x1 != null) {
       drawRangeSelection(ctx, layout, selection.x0, selection.x1);
