@@ -4,7 +4,8 @@
 목표: **작은 단위로 동작 확인하며** 쌓아 올리고, 마지막에 동기화·폴리시만 붙인다.
 
 > 리뷰 반영 (제스처 상태머신·핀치/휠 수식·activeChart·단일 viewport 진입점·시드/OHLC·축 규칙·DPR 감지).  
-> **구현 완료 후 현황**은 [docs/features.md](docs/features.md)를 본다. 본 문서는 설계·Phase 기록용이다.
+> **구현 완료 후 현황**은 [docs/features.md](docs/features.md)를 본다. 본 문서는 설계·Phase 기록용이다.  
+> 비교 축은 이후 **naive vs 비트맵 바인딩 + media/bitmap 좌표계**(`hidpi-canvas.js`)로 바뀌었다. 아래 `useDPR` / `setTransform(dpr)` 중심 서술은 초기 Phase 기준이다.
 
 ---
 
@@ -14,6 +15,7 @@
 |------|------|
 | `index.html` | 마크업: 헤더, 공통 컨트롤, 차트 패널 2개 |
 | `styles.css` | 레이아웃·반응형·컨트롤 스타일 |
+| `hidpi-canvas.js` | (이후 추가) 비트맵 바인딩 · rendering target — 현행 오른쪽 패널 |
 | `chart.js` | 데이터·뷰포트·렌더·제스처·동기화 |
 | `README.md` | 소개·핵심 개념·문서 링크 |
 | `docs/features.md` | 현재 구현 사항 (완료 후 작성) |

@@ -30,7 +30,7 @@ HTML Canvas로 캔들 차트를 그릴 때, **devicePixelRatio(DPR)를 적용하
 - 거래량 등 보조 지표 (이동평균은 이후 추가 — [구현 사항](docs/features.md) 참고)
 - 다크 테마 / 고급 차트 UI
 
-> **현재 구현 현황**은 [docs/features.md](docs/features.md)를 기준으로 한다. 본 스펙은 초기 합의 문서이며, 이후 추가분(이평선, 레이아웃 확대 등)은 구현 사항 문서에 기록한다.
+> **현재 구현 현황**은 [docs/features.md](docs/features.md)를 기준으로 한다. 본 스펙은 초기 합의 문서이며, 이후 추가분(이평선, 레이아웃 확대, **비교 축이 naive vs bitmap 바인딩·media/bitmap 좌표계로 변경** 등)은 구현 사항 문서에 기록한다. 아래 본문의 「DPR 적용 / `setTransform(dpr)`」 서술도 초기 설계이며, 현행 오른쪽 패널은 `hidpi-canvas.js`를 본다.
 
 ---
 
@@ -42,10 +42,12 @@ HTML Canvas로 캔들 차트를 그릴 때, **devicePixelRatio(DPR)를 적용하
 canvas-hidpi-candle-demo/
 ├── index.html           # 페이지 구조, 두 캔버스, 컨트롤
 ├── styles.css           # 레이아웃, 반응형, 기본 스타일
+├── hidpi-canvas.js      # 비트맵 바인딩 · media/bitmap 좌표 (현행 오른쪽 패널)
 ├── chart.js             # 데이터 생성, 렌더, 인터랙션
+├── .gitignore
 ├── README.md            # 소개·핵심 개념·문서 링크
-├── SPEC.md              # 본 스펙
-├── IMPLEMENTATION.md    # 구현 계획
+├── SPEC.md              # 본 스펙 (초기 합의)
+├── IMPLEMENTATION.md    # 구현 계획 (Phase 기록)
 └── docs/
     └── features.md      # 현재 구현 사항
 ```
