@@ -1404,7 +1404,7 @@
   };
 
   let activeChartId = "dpr";
-  let syncEnabled = false;
+  let syncEnabled = true;
   let rangeZoomMode = false;
   let liveEnabled = true;
   let isApplyingSync = false;
