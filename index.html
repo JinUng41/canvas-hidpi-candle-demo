@@ -10,7 +10,8 @@
     <header class="page-header">
       <h1>Canvas HiDPI 캔들 차트 비교</h1>
       <p class="lead">
-        확대해 최고가·최저가 글자의 선명도를 비교해 보세요.
+        왼쪽은 DPR을 쓰지 않아 HiDPI에서 흐릴 수 있고, 오른쪽은 비트맵 크기와
+        media/bitmap 좌표를 나눠 맞춥니다. 확대해 최고가·최저가 글자 선명도를 비교해 보세요.
         Shift+드래그 또는 「영역 확대」 켠 뒤 드래그하면 구간 확대됩니다.
       </p>
       <p id="dpr-label" class="dpr-label">현재 devicePixelRatio: —</p>
@@ -56,6 +57,7 @@
           <h2>DPR 미적용</h2>
           <span class="active-badge" hidden>조작 중</span>
         </div>
+        <p class="panel-desc">CSS 크기 = 버퍼. HiDPI에서 흐릴 수 있음.</p>
         <div class="panel-controls">
           <button type="button" data-local-action="zoom-in">확대</button>
           <button type="button" data-local-action="zoom-out">축소</button>
@@ -68,20 +70,24 @@
 
       <article class="chart-panel is-active" id="panel-dpr" data-chart-id="dpr">
         <div class="panel-header">
-          <h2>DPR 적용</h2>
+          <h2>DPR + bitmap 좌표계</h2>
           <span class="active-badge">조작 중</span>
         </div>
+        <p class="panel-desc">
+          suggested 비트맵 적용 · media로 시리즈 · bitmap으로 축·그리드·보조선.
+        </p>
         <div class="panel-controls">
           <button type="button" data-local-action="zoom-in">확대</button>
           <button type="button" data-local-action="zoom-out">축소</button>
           <button type="button" data-local-action="reset">리셋</button>
         </div>
         <div class="canvas-wrap">
-          <canvas id="chart-dpr" aria-label="DPR 적용 캔들 차트"></canvas>
+          <canvas id="chart-dpr" aria-label="DPR + bitmap 좌표계 캔들 차트"></canvas>
         </div>
       </article>
     </main>
 
-    <script src="chart.js?v=5"></script>
+    <script src="hidpi-canvas.js?v=1"></script>
+    <script src="chart.js?v=6"></script>
   </body>
 </html>

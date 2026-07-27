@@ -1,5 +1,6 @@
 /* Canvas HiDPI candle demo — vanilla JS
  * Sections: constants, data, viewport, canvas, coords, render, chart, app
+ * Right panel uses window.HidpiCanvas (hidpi-canvas.js) for bitmap binding + dual spaces.
  */
 
 (function () {
@@ -489,25 +490,10 @@
     ctx.restore();
   }
 
-  function drawCurrentPrice(ctx, layout, extent, price, isUp) {
+  function drawCurrentPriceLabel(ctx, layout, extent, price, isUp) {
     const { plotLeft, plotTop, plotWidth, plotHeight } = layout;
     const rawY = priceToY(price, extent, layout);
     const y = clamp(rawY, plotTop, plotTop + plotHeight);
-    const inRange = price >= extent.min && price <= extent.max;
-
-    if (inRange) {
-      ctx.save();
-      ctx.strokeStyle = COLORS.currentPriceLine;
-      ctx.lineWidth = 1;
-      ctx.setLineDash([4, 4]);
-      ctx.beginPath();
-      ctx.moveTo(plotLeft, y);
-      ctx.lineTo(plotLeft + plotWidth, y);
-      ctx.stroke();
-      ctx.setLineDash([]);
-      ctx.restore();
-    }
-
     const label = formatPrice(price);
     const padX = 5;
     const boxH = 16;
@@ -515,21 +501,229 @@
     const textW = ctx.measureText(label).width;
     const boxW = Math.min(textW + padX * 2, PAD_RIGHT - 4);
     const x = plotLeft + plotWidth + 4;
-    const tagY = y;
 
     ctx.fillStyle = isUp ? COLORS.up : COLORS.down;
-    ctx.fillRect(x, tagY - boxH / 2, boxW, boxH);
+    ctx.fillRect(x, y - boxH / 2, boxW, boxH);
     ctx.fillStyle = "#ffffff";
     ctx.textAlign = "left";
     ctx.textBaseline = "middle";
-    ctx.fillText(label, x + padX, tagY);
+    ctx.fillText(label, x + padX, y);
   }
 
-  function drawChart(ctx, candles, maSeries, viewport, layout, selection) {
+  function drawMediaLineGuides(ctx, candles, viewport, layout, extent, pTicks, tTicks) {
+    const { plotLeft, plotTop, plotWidth, plotHeight } = layout;
+
+    ctx.save();
+    ctx.strokeStyle = COLORS.grid;
+    ctx.lineWidth = 1;
+
+    for (let i = 0; i < pTicks.length; i++) {
+      const y = priceToY(pTicks[i], extent, layout);
+      if (y < plotTop || y > plotTop + plotHeight) continue;
+      ctx.beginPath();
+      ctx.moveTo(plotLeft, y);
+      ctx.lineTo(plotLeft + plotWidth, y);
+      ctx.stroke();
+    }
+
+    for (let i = 0; i < tTicks.length; i++) {
+      const idx = (tTicks[i] - START_TIME_UTC) / MINUTE_MS;
+      const x = indexToX(idx + 0.5, viewport, layout);
+      if (x < plotLeft || x > plotLeft + plotWidth) continue;
+      ctx.beginPath();
+      ctx.moveTo(x, plotTop);
+      ctx.lineTo(x, plotTop + plotHeight);
+      ctx.stroke();
+    }
+
+    ctx.strokeStyle = COLORS.axis;
+    ctx.strokeRect(plotLeft + 0.5, plotTop + 0.5, plotWidth - 1, plotHeight - 1);
+
+    const highCandle = candles[extent.highIndex];
+    const lowCandle = candles[extent.lowIndex];
+    const yHi = priceToY(highCandle.high, extent, layout);
+    const yLo = priceToY(lowCandle.low, extent, layout);
+
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(plotLeft, plotTop, plotWidth, plotHeight);
+    ctx.clip();
+    ctx.setLineDash([4, 3]);
+    ctx.strokeStyle = COLORS.highLine;
+    ctx.beginPath();
+    ctx.moveTo(plotLeft, yHi);
+    ctx.lineTo(plotLeft + plotWidth, yHi);
+    ctx.stroke();
+    ctx.strokeStyle = COLORS.lowLine;
+    ctx.beginPath();
+    ctx.moveTo(plotLeft, yLo);
+    ctx.lineTo(plotLeft + plotWidth, yLo);
+    ctx.stroke();
+    ctx.setLineDash([]);
+
+    const currentCandle = candles[candles.length - 1];
+    if (currentCandle) {
+      const inRange =
+        currentCandle.close >= extent.min && currentCandle.close <= extent.max;
+      if (inRange) {
+        const y = clamp(
+          priceToY(currentCandle.close, extent, layout),
+          plotTop,
+          plotTop + plotHeight
+        );
+        ctx.strokeStyle = COLORS.currentPriceLine;
+        ctx.setLineDash([4, 4]);
+        ctx.beginPath();
+        ctx.moveTo(plotLeft, y);
+        ctx.lineTo(plotLeft + plotWidth, y);
+        ctx.stroke();
+        ctx.setLineDash([]);
+      }
+    }
+    ctx.restore();
+    ctx.restore();
+  }
+
+  /** Axis / grid / guide strokes in device-pixel space (1px hairlines).
+   * @param {'grid'|'overlay'|'all'=} layer
+   */
+  function drawBitmapLineGuides(scope, candles, viewport, layout, layer) {
+    layer = layer || "all";
+    const drawGrid = layer === "all" || layer === "grid";
+    const drawOverlay = layer === "all" || layer === "overlay";
+    const ctx = scope.context;
+    const hRatio = scope.horizontalPixelRatio;
+    const vRatio = scope.verticalPixelRatio;
+    const { plotLeft, plotTop, plotWidth, plotHeight } = layout;
+
+    function bx(x) {
+      return Math.round(x * hRatio) + 0.5;
+    }
+    function by(y) {
+      return Math.round(y * vRatio) + 0.5;
+    }
+
+    const { from, toExclusive } = getVisibleRange(viewport, candles.length);
+    if (from >= toExclusive) return;
+
+    const extent = getPriceExtent(candles, from, toExclusive);
+    const first = candles[from];
+    const last = candles[toExclusive - 1];
+    const { ticks: pTicks } = priceTicks(extent.min, extent.max, 5);
+    const { ticks: tTicks } = timeTicks(first.time, last.time, 6);
+
+    const left = bx(plotLeft);
+    const right = bx(plotLeft + plotWidth);
+    const top = by(plotTop);
+    const bottom = by(plotTop + plotHeight);
+
+    if (drawGrid) {
+      ctx.strokeStyle = COLORS.grid;
+      ctx.lineWidth = 1;
+
+      for (let i = 0; i < pTicks.length; i++) {
+        const y = priceToY(pTicks[i], extent, layout);
+        if (y < plotTop || y > plotTop + plotHeight) continue;
+        const yb = by(y);
+        ctx.beginPath();
+        ctx.moveTo(left, yb);
+        ctx.lineTo(right, yb);
+        ctx.stroke();
+      }
+
+      for (let i = 0; i < tTicks.length; i++) {
+        const idx = (tTicks[i] - START_TIME_UTC) / MINUTE_MS;
+        const x = indexToX(idx + 0.5, viewport, layout);
+        if (x < plotLeft || x > plotLeft + plotWidth) continue;
+        const xb = bx(x);
+        ctx.beginPath();
+        ctx.moveTo(xb, top);
+        ctx.lineTo(xb, bottom);
+        ctx.stroke();
+      }
+
+      ctx.strokeStyle = COLORS.axis;
+      ctx.strokeRect(
+        bx(plotLeft),
+        by(plotTop),
+        Math.round(plotWidth * hRatio) - 1,
+        Math.round(plotHeight * vRatio) - 1
+      );
+    }
+
+    if (!drawOverlay) return;
+
+    const highCandle = candles[extent.highIndex];
+    const lowCandle = candles[extent.lowIndex];
+    const yHi = by(priceToY(highCandle.high, extent, layout));
+    const yLo = by(priceToY(lowCandle.low, extent, layout));
+
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(
+      Math.round(plotLeft * hRatio),
+      Math.round(plotTop * vRatio),
+      Math.round(plotWidth * hRatio),
+      Math.round(plotHeight * vRatio)
+    );
+    ctx.clip();
+    ctx.lineWidth = 1;
+
+    const dashX = Math.max(1, Math.round(4 * hRatio));
+    const dashY = Math.max(1, Math.round(3 * vRatio));
+    ctx.setLineDash([dashX, dashY]);
+    ctx.strokeStyle = COLORS.highLine;
+    ctx.beginPath();
+    ctx.moveTo(left, yHi);
+    ctx.lineTo(right, yHi);
+    ctx.stroke();
+    ctx.strokeStyle = COLORS.lowLine;
+    ctx.beginPath();
+    ctx.moveTo(left, yLo);
+    ctx.lineTo(right, yLo);
+    ctx.stroke();
+
+    const currentCandle = candles[candles.length - 1];
+    if (currentCandle) {
+      const inRange =
+        currentCandle.close >= extent.min && currentCandle.close <= extent.max;
+      if (inRange) {
+        const y = by(
+          clamp(
+            priceToY(currentCandle.close, extent, layout),
+            plotTop,
+            plotTop + plotHeight
+          )
+        );
+        const dash = Math.max(1, Math.round(4 * hRatio));
+        ctx.strokeStyle = COLORS.currentPriceLine;
+        ctx.setLineDash([dash, dash]);
+        ctx.beginPath();
+        ctx.moveTo(left, y);
+        ctx.lineTo(right, y);
+        ctx.stroke();
+      }
+    }
+    ctx.setLineDash([]);
+    ctx.restore();
+  }
+
+  /**
+   * Media-space chart paint.
+   * @param {{ lineGuides?: boolean, clear?: boolean }=} options
+   *   lineGuides=false skips grid/axis/guide strokes (bitmap layer on HiDPI panel).
+   *   clear=false skips clear/background (already painted before bitmap guides).
+   */
+  function drawChart(ctx, candles, maSeries, viewport, layout, selection, options) {
+    const lineGuides = !options || options.lineGuides !== false;
+    const doClear = !options || options.clear !== false;
+    const priceGuideLabels = !options || options.priceGuideLabels !== false;
     const { cssW, cssH, plotLeft, plotTop, plotWidth, plotHeight } = layout;
-    ctx.clearRect(0, 0, cssW, cssH);
-    ctx.fillStyle = COLORS.background;
-    ctx.fillRect(0, 0, cssW, cssH);
+    if (doClear) {
+      ctx.clearRect(0, 0, cssW, cssH);
+      ctx.fillStyle = COLORS.background;
+      ctx.fillRect(0, 0, cssW, cssH);
+    }
 
     const { from, toExclusive } = getVisibleRange(viewport, candles.length);
     if (from >= toExclusive) return;
@@ -544,27 +738,30 @@
       6
     );
 
-    // grid + price axis
+    if (lineGuides) {
+      drawMediaLineGuides(
+        ctx,
+        candles,
+        viewport,
+        layout,
+        extent,
+        pTicks,
+        tTicks
+      );
+    }
+
+    // axis labels (media)
     ctx.save();
-    ctx.strokeStyle = COLORS.grid;
     ctx.fillStyle = COLORS.axisText;
     ctx.font = "11px sans-serif";
     ctx.textAlign = "left";
     ctx.textBaseline = "middle";
-    ctx.lineWidth = 1;
-
     for (let i = 0; i < pTicks.length; i++) {
       const price = pTicks[i];
       const y = priceToY(price, extent, layout);
       if (y < plotTop || y > plotTop + plotHeight) continue;
-      ctx.beginPath();
-      ctx.moveTo(plotLeft, y);
-      ctx.lineTo(plotLeft + plotWidth, y);
-      ctx.stroke();
       ctx.fillText(formatPrice(price), plotLeft + plotWidth + 6, y);
     }
-
-    // time axis
     ctx.textAlign = "center";
     ctx.textBaseline = "top";
     for (let i = 0; i < tTicks.length; i++) {
@@ -572,18 +769,9 @@
       const idx = (t - START_TIME_UTC) / MINUTE_MS;
       const x = indexToX(idx + 0.5, viewport, layout);
       if (x < plotLeft || x > plotLeft + plotWidth) continue;
-      ctx.strokeStyle = COLORS.grid;
-      ctx.beginPath();
-      ctx.moveTo(x, plotTop);
-      ctx.lineTo(x, plotTop + plotHeight);
-      ctx.stroke();
-      ctx.fillStyle = COLORS.axisText;
       ctx.fillText(formatTimeUTC(t, tStep), x, plotTop + plotHeight + 6);
     }
-
-    // plot border
-    ctx.strokeStyle = COLORS.axis;
-    ctx.strokeRect(plotLeft + 0.5, plotTop + 0.5, plotWidth - 1, plotHeight - 1);
+    ctx.restore();
 
     // candles (clipped)
     ctx.save();
@@ -618,7 +806,6 @@
       ctx.fillRect(x - candleW / 2, bodyTop, candleW, bodyH);
     }
 
-    // moving averages (above candles, still clipped)
     for (let i = 0; i < MA_PERIODS.length; i++) {
       const item = MA_PERIODS[i];
       drawMovingAverage(
@@ -632,8 +819,8 @@
         COLORS[item.colorKey]
       );
     }
+    ctx.restore();
 
-    // guide lines stay inside plot
     const highCandle = candles[extent.highIndex];
     const lowCandle = candles[extent.lowIndex];
     const yHi = priceToY(highCandle.high, extent, layout);
@@ -641,26 +828,56 @@
     const xHi = indexToX(extent.highIndex + 0.5, viewport, layout);
     const xLo = indexToX(extent.lowIndex + 0.5, viewport, layout);
 
-    ctx.strokeStyle = COLORS.highLine;
-    ctx.setLineDash([4, 3]);
-    ctx.beginPath();
-    ctx.moveTo(plotLeft, yHi);
-    ctx.lineTo(plotLeft + plotWidth, yHi);
-    ctx.stroke();
-    ctx.strokeStyle = COLORS.lowLine;
-    ctx.beginPath();
-    ctx.moveTo(plotLeft, yLo);
-    ctx.lineTo(plotLeft + plotWidth, yLo);
-    ctx.stroke();
-    ctx.setLineDash([]);
-    ctx.restore();
+    drawMaLegend(ctx, layout);
 
-    // labels outside clip: above the high wick / below the low wick of that candle
+    if (priceGuideLabels) {
+      drawCandlePriceLabel(
+        ctx,
+        layout,
+        xHi,
+        yHi,
+        COLORS.highLine,
+        "최고 " + formatPrice(highCandle.high),
+        "above"
+      );
+      drawCandlePriceLabel(
+        ctx,
+        layout,
+        xLo,
+        yLo,
+        COLORS.lowLine,
+        "최저 " + formatPrice(lowCandle.low),
+        "below"
+      );
+
+      const currentCandle = candles[candles.length - 1];
+      if (currentCandle) {
+        drawCurrentPriceLabel(
+          ctx,
+          layout,
+          extent,
+          currentCandle.close,
+          currentCandle.close >= currentCandle.open
+        );
+      }
+    }
+
+    if (selection && selection.x0 != null && selection.x1 != null) {
+      drawRangeSelection(ctx, layout, selection.x0, selection.x1);
+    }
+  }
+
+  function drawPriceGuideLabels(ctx, candles, viewport, layout) {
+    const { from, toExclusive } = getVisibleRange(viewport, candles.length);
+    if (from >= toExclusive) return;
+    const extent = getPriceExtent(candles, from, toExclusive);
+    const highCandle = candles[extent.highIndex];
+    const lowCandle = candles[extent.lowIndex];
     drawCandlePriceLabel(
       ctx,
       layout,
-      xHi,
-      yHi,
+      indexToX(extent.highIndex + 0.5, viewport, layout),
+      priceToY(highCandle.high, extent, layout),
       COLORS.highLine,
       "최고 " + formatPrice(highCandle.high),
       "above"
@@ -668,17 +885,15 @@
     drawCandlePriceLabel(
       ctx,
       layout,
-      xLo,
-      yLo,
+      indexToX(extent.lowIndex + 0.5, viewport, layout),
+      priceToY(lowCandle.low, extent, layout),
       COLORS.lowLine,
       "최저 " + formatPrice(lowCandle.low),
       "below"
     );
-    drawMaLegend(ctx, layout);
-
     const currentCandle = candles[candles.length - 1];
     if (currentCandle) {
-      drawCurrentPrice(
+      drawCurrentPriceLabel(
         ctx,
         layout,
         extent,
@@ -686,12 +901,6 @@
         currentCandle.close >= currentCandle.open
       );
     }
-
-    if (selection && selection.x0 != null && selection.x1 != null) {
-      drawRangeSelection(ctx, layout, selection.x0, selection.x1);
-    }
-
-    ctx.restore();
   }
 
   function drawRangeSelection(ctx, layout, x0, x1) {
@@ -764,6 +973,7 @@
     candles,
     maSeries,
     useDPR,
+    hidpi,
     getViewport,
     requestViewport,
     onInteract,
@@ -776,21 +986,99 @@
     let pinch = null;
     let selection = null;
     let rangeZoomApplied = false;
+    const Hidpi = typeof window !== "undefined" ? window.HidpiCanvas : null;
+    const bitmapBinding =
+      hidpi && Hidpi
+        ? Hidpi.bindCanvasBitmapSize(canvas, {
+            onSuggestedBitmapSizeChanged: function (_oldSize, newSize) {
+              // Redraw only when a new size is suggested (apply happens in draw).
+              if (newSize != null) measureAndDraw();
+            },
+          })
+        : null;
 
-    function ensureSized() {
+    function ensureSizedNaive() {
       const sized = resizeCanvas(canvas, useDPR);
       ctx = sized.ctx;
       layout = computeLayout(sized.cssW, sized.cssH);
       return sized;
     }
 
+    function paintHidpi() {
+      if (!bitmapBinding || !Hidpi) {
+        ensureSizedNaive();
+        drawChart(ctx, candles, maSeries, getViewport(), layout, selection);
+        return;
+      }
+
+      bitmapBinding.applySuggestedBitmapSize();
+      const client = bitmapBinding.syncClientSize();
+      const cssW = Math.max(1, Math.floor(client.width));
+      const cssH = Math.max(1, Math.floor(client.height));
+      layout = computeLayout(cssW, cssH);
+      ctx = canvas.getContext("2d");
+
+      const mediaSize = { width: cssW, height: cssH };
+      const bitmapSize = {
+        width: canvas.width,
+        height: canvas.height,
+      };
+
+      if (bitmapSize.width < 1 || bitmapSize.height < 1) {
+        // Observer may still be resolving; fall back so the panel is not blank.
+        const dpr = window.devicePixelRatio || 1;
+        canvas.width = Math.max(1, Math.round(cssW * dpr));
+        canvas.height = Math.max(1, Math.round(cssH * dpr));
+        bitmapSize.width = canvas.width;
+        bitmapSize.height = canvas.height;
+      }
+
+      const target = Hidpi.createRenderingTarget(ctx, mediaSize, bitmapSize);
+      const vp = getViewport();
+      // bg → grid (under) → series → overlay guides (over)
+      target.useMediaCoordinateSpace(function (scope) {
+        const c = scope.context;
+        c.clearRect(0, 0, cssW, cssH);
+        c.fillStyle = COLORS.background;
+        c.fillRect(0, 0, cssW, cssH);
+      });
+      target.useBitmapCoordinateSpace(function (scope) {
+        drawBitmapLineGuides(scope, candles, vp, layout, "grid");
+      });
+      target.useMediaCoordinateSpace(function (scope) {
+        drawChart(
+          scope.context,
+          candles,
+          maSeries,
+          vp,
+          layout,
+          selection,
+          { lineGuides: false, clear: false, priceGuideLabels: false }
+        );
+      });
+      target.useBitmapCoordinateSpace(function (scope) {
+        drawBitmapLineGuides(scope, candles, vp, layout, "overlay");
+      });
+      target.useMediaCoordinateSpace(function (scope) {
+        drawPriceGuideLabels(scope.context, candles, vp, layout);
+      });
+    }
+
     function paint() {
-      if (!ctx) ensureSized();
+      if (bitmapBinding) {
+        paintHidpi();
+        return;
+      }
+      if (!ctx) ensureSizedNaive();
       drawChart(ctx, candles, maSeries, getViewport(), layout, selection);
     }
 
     function measureAndDraw() {
-      ensureSized();
+      if (bitmapBinding) {
+        paintHidpi();
+        return;
+      }
+      ensureSizedNaive();
       paint();
     }
 
@@ -1066,6 +1354,7 @@
       id,
       canvas,
       useDPR,
+      hidpi: !!bitmapBinding,
       draw: measureAndDraw,
       updateCursor,
       zoomCentered(factor) {
@@ -1092,6 +1381,7 @@
         requestViewport(defaultViewport(candles.length));
       },
       destroy() {
+        if (bitmapBinding) bitmapBinding.dispose();
         canvas.removeEventListener("pointerdown", onPointerDown);
         canvas.removeEventListener("pointermove", onPointerMove);
         canvas.removeEventListener("pointerup", onPointerUp);
@@ -1206,6 +1496,7 @@
       candles,
       maSeries,
       useDPR: false,
+      hidpi: false,
       getViewport: function () {
         return viewports.raw;
       },
@@ -1220,7 +1511,8 @@
       canvas: document.getElementById("chart-dpr"),
       candles,
       maSeries,
-      useDPR: true,
+      useDPR: false,
+      hidpi: true,
       getViewport: function () {
         return viewports.dpr;
       },

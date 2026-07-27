@@ -10,7 +10,9 @@
 | 항목 | 상태 |
 |------|------|
 | 바닐라 HTML5 Canvas 캔들 차트 | 완료 |
-| DPR 미적용 / 적용 나란히 비교 | 완료 |
+| DPR 미적용 / bitmap 좌표계 나란히 비교 | 완료 |
+| 비트맵 크기 suggested → draw 직전 apply | 완료 |
+| media / bitmap 이중 좌표계 (오른쪽) | 완료 |
 | 가짜 OHLC 2,000개 (시드 42) | 완료 |
 | 줌·팬·핀치·버튼 | 완료 |
 | 보이는 구간 최고가·최저가 | 완료 |
@@ -28,11 +30,13 @@
 |------|------|
 | `index.html` | 페이지 골격, 공통/로컬 컨트롤, 캔버스 2개 |
 | `styles.css` | 전체 폭 레이아웃, 반응형, 차트 높이 |
-| `chart.js` | 데이터·DPR·렌더·제스처·동기화·이평선 |
+| `hidpi-canvas.js` | 비트맵 크기 바인딩 + rendering target (media/bitmap scope) |
+| `chart.js` | 데이터·렌더·제스처·동기화·이평선 |
 
 - 빌드 도구·npm 의존성·차트 라이브러리 없음
 - HTML5 `<canvas>` + `CanvasRenderingContext2D`
 - 브라우저에서 `index.html`을 열면 동작
+- 오른쪽 HiDPI 기법은 [fancy-canvas](https://github.com/tradingview/fancy-canvas) 아이디어를 참고해 `hidpi-canvas.js`에 직접 구현 (패키지 미사용)
 
 ### 구조도
 
@@ -42,68 +46,80 @@
 flowchart TB
   subgraph page["index.html"]
     H["헤더 · DPR 표시"]
-    T["공통 툴바<br/>확대/축소/리셋/프리셋/동기화"]
+    T["공통 툴바"]
     subgraph charts["차트 영역"]
       R["패널: DPR 미적용<br/>canvas#chart-raw"]
-      D["패널: DPR 적용<br/>canvas#chart-dpr"]
+      D["패널: DPR + bitmap 좌표계<br/>canvas#chart-dpr"]
     end
   end
 
   CSS["styles.css"] --> page
+  HIDPI["hidpi-canvas.js"] --> JS
   JS["chart.js"] --> page
-  R --> Draw
-  D --> Draw
-  Draw["공통 drawChart"]
+  R --> DrawRaw["drawChart media + lineGuides"]
+  D --> Bind["bindCanvasBitmapSize"]
+  Bind --> Target["createRenderingTarget"]
+  Target --> DrawMedia["media: 시리즈·라벨"]
+  Target --> DrawBmp["bitmap: 축·그리드·보조선"]
 ```
 
 #### 런타임 데이터 흐름
 
 ```mermaid
 flowchart LR
-  Gen["generateCandles<br/>시드 42"] --> MA["computeMovingAverages<br/>MA5/20/60/120"]
-  Gen --> VP["viewports<br/>raw / dpr"]
-  MA --> Draw["drawChart"]
+  Gen["generateCandles"] --> MA["computeMovingAverages"]
+  Gen --> VP["viewports raw / dpr"]
+  MA --> Draw
   VP --> Draw
 
   Input["휠 · 드래그 · 핀치 · 버튼"] --> Active["setActiveChart"]
   Input --> Apply["applyViewport"]
   Apply --> VP
-  Apply -->|"sync ON"| VP
   VP --> Draw
-  Draw --> RawBuf["resizeCanvas useDPR=false"]
-  Draw --> DprBuf["resizeCanvas useDPR=true"]
+
+  Draw --> RawBuf["resizeCanvas naive"]
+  Draw --> Sug["suggested bitmap"]
+  Sug --> ApplyBmp["apply at draw()"]
+  ApplyBmp --> Target["media + bitmap scopes"]
 ```
 
-#### DPR 처리 분기
+#### HiDPI 처리 분기
 
 ```mermaid
 flowchart TB
-  CSS["CSS 크기<br/>clientWidth × clientHeight"] --> Q{useDPR?}
-  Q -->|아니오| Raw["buffer = CSS 크기<br/>transform 없음"]
-  Q -->|예| Hi["buffer = CSS × devicePixelRatio<br/>setTransform dpr"]
-  Raw --> Same["동일한 drawChart<br/>CSS 픽셀 좌표"]
-  Hi --> Same
-  Same --> Out["화면 표시"]
+  CSS["CSS client 크기"] --> Q{패널?}
+  Q -->|raw| Raw["buffer = CSS<br/>transform 없음"]
+  Q -->|dpr| Obs["device-pixel-content-box<br/>또는 predictedBitmapSize"]
+  Obs --> Sug["suggestedBitmapSize"]
+  Sug --> Apply["draw() 직전 apply"]
+  Apply --> Ratio["hRatio / vRatio = bitmap ÷ media"]
+  Ratio --> Media["useMediaCoordinateSpace<br/>캔들·MA·축 라벨"]
+  Ratio --> Bmp["useBitmapCoordinateSpace<br/>그리드·축·보조선 1px"]
+  Raw --> Out["화면 표시"]
+  Media --> Out
+  Bmp --> Out
 ```
 
 ---
 
-## 3. DPR 비교 (핵심)
+## 3. 비교 축 (핵심)
 
-공통 `drawChart`로 그리고, 차이는 버퍼 준비만 다름.
-
-**DPR 미적용**
+### DPR 미적용 (왼쪽)
 
 - `canvas.width / height` = CSS 픽셀 크기
-- `setTransform` 없음
+- transform 없음
 - HiDPI에서 확대 보간 → 글자·선이 흐릴 수 있음
 
-**DPR 적용**
+### DPR + bitmap 좌표계 (오른쪽)
 
-- `dpr = devicePixelRatio`
-- `canvas.width = cssWidth * dpr` (height 동일)
-- `ctx.setTransform(dpr, 0, 0, dpr, 0, 0)`
-- 이후 좌표·폰트는 CSS 픽셀 기준으로 동일하게 작성
+- `hidpi-canvas.js`의 `bindCanvasBitmapSize`
+  - 우선 `ResizeObserver` + `device-pixel-content-box`
+  - 미지원 시 `getClientRects` + `predictedBitmapSize` + DPR `matchMedia`
+- 크기는 **suggested**로만 쌓이고, 오른쪽 `draw()` 진입 시 `applySuggestedBitmapSize()`
+- `createRenderingTarget`으로 media / bitmap scope 분리
+  - **media**: 배경·캔들·이평·축 텍스트·라벨 (`hRatio`/`vRatio` scale)
+  - **bitmap**: 그리드·플롯 테두리·최고/최저·현재가 **선** (디바이스 픽셀 1px 정렬)
+- 가로·세로 pixel ratio는 `bitmapSize / mediaSize`로 각각 계산
 
 상단에 `현재 devicePixelRatio: n` 표시.  
 `n === 1`이면 두 차트 차이가 거의 없을 수 있다.
@@ -151,7 +167,7 @@ flowchart TB
 
 ### 활성 차트·동기화
 
-- 기본 활성: **DPR 적용** 패널 (`조작 중` 배지)
+- 기본 활성: **DPR + bitmap 좌표계** 패널 (`조작 중` 배지)
 - 공통 버튼은 활성 차트에 적용 (동기화 ON이면 양쪽)
 - 패널별 로컬 확대·축소·리셋
 - **동기화** 체크박스: 한쪽 뷰포트를 다른 쪽에 실시간 반영
@@ -164,19 +180,19 @@ flowchart TB
 ## 6. 레이아웃·반응형
 
 - 페이지 `max-width` 제한 없음 → 화면 전체 폭 사용
-- 넓은 화면: 좌우 2열 (미적용 | 적용)
+- 넓은 화면: 좌우 2열 (미적용 | bitmap 좌표계)
 - 좁은 화면(~900px 이하): 세로 스택
 - 차트 높이: `clamp(480px, 100vh - 210px, 900px)` (모바일은 별도 clamp)
 - 차트 영역 `touch-action: none` (제스처와 페이지 스크롤 분리)
-- `ResizeObserver` + DPR 변경 감지 시 버퍼·다시 그리기
+- `ResizeObserver` + DPR 변경 감지 시 다시 그리기 (오른쪽은 binding suggested와 연동)
 
 ---
 
 ## 7. UI 문구 (한글)
 
 - 제목: Canvas HiDPI 캔들 차트 비교
-- 안내: 확대해 최고가·최저가 글자의 선명도를 비교해 보세요.
-- 패널: DPR 미적용 / DPR 적용
+- 안내: 왼쪽 naive / 오른쪽 비트맵·좌표계 분리 설명 + 선명도 비교
+- 패널: DPR 미적용 / DPR + bitmap 좌표계
 - 버튼: 확대, 축소, 리셋, 500개, 40개, 동기화, 지금 맞추기
 
 ---
@@ -189,6 +205,7 @@ flowchart TB
 |------|------|
 | 이동평균선 | MA5 / 20 / 60 / 120 |
 | 레이아웃 폭·높이 | 전체 폭 + 뷰포트 기준 차트 높이로 확대 |
+| bitmap 바인딩·이중 좌표 | 오른쪽 패널; `hidpi-canvas.js` |
 
 구현 계획의 Phase 1~8 범위(골격·데이터·렌더·제스처·동기화·리사이즈)는 반영 완료.
 

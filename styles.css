@@ -153,6 +153,13 @@ body.range-zoom-mode .canvas-wrap canvas {
   font-size: 1.05rem;
 }
 
+.panel-desc {
+  margin: 0 0 10px;
+  font-size: 0.82rem;
+  line-height: 1.45;
+  color: #5c6770;
+}
+
 .active-badge {
   font-size: 0.75rem;
   font-weight: 700;
